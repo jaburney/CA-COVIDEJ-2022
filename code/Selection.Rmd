@@ -1,0 +1,1701 @@
+---
+title: "Regression plots for main text (cleaned)"
+author: "BLRG"
+output:
+    github_document:
+    pandoc_args: --webtex
+toc: true
+toc_depth: 2
+---
+    
+    
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(tidyverse)
+require(ggplot2)
+require(gridExtra)
+require(lfe)
+require(Formula)
+require(stargazer)
+require(broom)
+require(dplyr)
+require(survey)
+require(reldist)
+
+#path to your working directory
+wd_path <- "./"
+
+#modify ggplot theme
+dot.size <- 1; font.size <- 6; ave.font.size <- 0.7
+
+theme_fig2 <- function(base_size=font.size) {
+    ret <- theme_bw(base_size) %+replace%
+        theme(panel.background = element_rect(fill="#ffffff", colour=NA),
+              title=element_text(vjust=1.2, face="bold", size = font.size),
+              panel.border = element_blank(), 
+              axis.line=element_blank(),
+              panel.grid.minor=element_blank(),
+              panel.grid.major.y = element_blank(),
+              panel.grid.major.x = element_line(size=0.1, colour="grey80", linetype="solid"),
+              axis.ticks=element_blank(),
+              legend.position="none", 
+              axis.title=element_text(size=rel(0.8), face="bold"),
+              strip.text=element_text(size=rel(1)),
+              strip.background=element_rect(fill="#ffffff", colour=NA),
+              panel.spacing.y=unit(1.5, "lines"),
+              legend.key = element_blank())
+    
+    ret
+}
+
+theme_fig3 <- function() {
+    ret <- theme_bw() %+replace%
+        theme(panel.background = element_rect(fill="#ffffff", colour=NA),
+              panel.border = element_blank(), 
+              axis.line=element_blank(),
+              panel.grid.minor=element_blank(),
+              panel.grid.major.y = element_blank(),
+              panel.grid.major.x = element_line(size=0.1, colour="grey80", linetype="solid"),
+              axis.ticks=element_blank(),
+              legend.position="none", 
+              strip.background=element_rect(fill="#ffffff", colour=NA),
+              panel.spacing.y=unit(1.5, "lines"),
+              legend.key = element_blank())
+    
+    ret
+}
+
+
+theme_fig4 <- function() {
+    ret <- theme_bw() %+replace%
+        theme(#panel.background = element_rect(fill="#ffffff", colour=NA),
+              #panel.border = element_blank(), 
+              line = element_line(size=0.2),
+              axis.line=element_blank(),
+              axis.title.x=element_blank(),
+              axis.title.y=element_blank(),
+              axis.text.x=element_blank(),
+              axis.text.y=element_blank(),
+              panel.grid.minor=element_blank(),
+              panel.grid.major.y = element_blank(),
+              panel.grid.major.x = element_line(size=0.1, colour="grey80", linetype="solid"),
+              legend.position="none", 
+              #strip.background=element_rect(fill="#ffffff", colour=NA),
+              #panel.spacing.y=unit(1.5, "lines"),
+              legend.key = element_blank())
+    
+    ret
+}
+
+
+```
+## Main models
+
+Run the prep file to grab all data needed for the analysis.
+
+```{r, run the prep file,  echo=FALSE, cache=F, warning=FALSE, message=FALSE, results='hide'}
+source(paste0(wd_path,"/code/Prep.R"))
+```
+
+Align the days, create vigintile cuts for the weather and temp controls, create 2020 to 2019 differences and delete missing values.
+
+```{r prep data}
+# Correct weekday
+fe_data_cbg$DOY[fe_data_cbg$year==2019] <- fe_data_cbg$DOY[fe_data_cbg$year==2019] -1
+table(fe_data_cbg$wday[fe_data_cbg$DOY==1],fe_data_cbg$year[fe_data_cbg$DOY==1])
+# Create the differences 
+
+# create FEs and interactions in vigintiles
+fe_data_cbg <- fe_data_cbg %>% mutate(T_cuts_vigintiles = cut(TEMP, breaks = quantile(fe_data_cbg$TEMP,probs = seq(0,1,0.05))))
+summary(fe_data_cbg$T_cuts_vigintiles)
+fe_data_cbg <- fe_data_cbg %>% mutate(RH_cuts_vigintiles = cut(RH, breaks = quantile(fe_data_cbg$RH,probs = seq(0,1,0.05))))
+summary(fe_data_cbg$RH_cuts_vigintiles)
+fe_data_cbg <- fe_data_cbg %>% mutate(PRECIP_cuts_vigintiles = cut(PRECIP, breaks = c(-0.01,unique(quantile(fe_data_cbg$PRECIP,probs = seq(0,1,0.05))))))
+summary(fe_data_cbg$PRECIP_cuts_vigintiles)
+
+# interact the vigintiles, this is a factor for FEs
+fe_data_cbg <- fe_data_cbg %>% mutate(T_RH_PRECIP_FEs = interaction(T_cuts_vigintiles, RH_cuts_vigintiles,PRECIP_cuts_vigintiles))
+
+
+fe_data_cbg_diff <- fe_data_cbg %>% filter(year==2020) %>%  mutate(T_RH_PRECIP_FEs_20 = T_RH_PRECIP_FEs,
+                  T_FE_20 = T_cuts_vigintiles, RH_FE_20 = RH_cuts_vigintiles, PRECIP_FE_20 = PRECIP_cuts_vigintiles)
+
+fe_data_cbg_2019 <- fe_data_cbg %>% filter(year==2019) %>% 
+    select(block_group, DOY, county, tract, sample_mean_19 = sample_mean, T_RH_PRECIP_FEs_19 = T_RH_PRECIP_FEs,
+                  T_FE_19 = T_cuts_vigintiles, RH_FE_19 = RH_cuts_vigintiles, PRECIP_FE_19 = PRECIP_cuts_vigintiles, 
+           TEMP_19 = TEMP, RH_19 = RH, PRECIP_19 = PRECIP, pct_away_cbg_19 = pct_away_cbg)
+
+fe_data_cbg_diff <- fe_data_cbg_diff %>%  left_join(fe_data_cbg_2019) %>% 
+    mutate(sample_mean_diff = sample_mean - sample_mean_19, 
+           pct_away_diff = pct_away_cbg  - pct_away_cbg_19)  %>% 
+    drop_na(sample_mean_diff, pct_away_diff, post, ln_inc_cbg, ln_road_dens)  #%>%  filter(adj_phase==F)
+
+# clean the diff data first
+fe_data_cbg_diff <- fe_data_cbg_diff %>%   select(wk, block_group, tract, county, state, date,adj_phase,
+                              ln_inc_cbg, share_nonwhite_alone, share_hisp, share_black, share_asian, ln_road_dens, ln_pop_dens, 
+                              TEMP, RH, PRECIP, T_RH_PRECIP_FEs_20, TEMP_19, RH_19, PRECIP_19, T_RH_PRECIP_FEs_19,
+                              contains("FE_19"), contains("FE_20"),
+                              starts_with("sample_mean"), year, starts_with("pct_away"), post, prc_dev)  %>%  drop_na()
+
+```
+
+Same steps for data that differs by source (CARB and PurpleAir).
+
+```{r prep data source}
+# Correct weekday
+fe_data_cbg_source$DOY[fe_data_cbg_source$year==2019] <- fe_data_cbg_source$DOY[fe_data_cbg_source$year==2019] -1
+table(fe_data_cbg_source$wday[fe_data_cbg_source$DOY==1],fe_data_cbg_source$year[fe_data_cbg_source$DOY==1])
+
+# create FEs and interactions in vigintiles
+fe_data_cbg_source <- fe_data_cbg_source %>% mutate(T_cuts_vigintiles = cut(TEMP, breaks = quantile(fe_data_cbg_source$TEMP,probs = seq(0,1,0.05))))
+summary(fe_data_cbg_source$T_cuts_vigintiles)
+fe_data_cbg_source <- fe_data_cbg_source %>% mutate(RH_cuts_vigintiles = cut(RH, breaks = quantile(fe_data_cbg_source$RH,probs = seq(0,1,0.05))))
+summary(fe_data_cbg_source$RH_cuts_vigintiles)
+fe_data_cbg_source <- fe_data_cbg_source %>% mutate(PRECIP_cuts_vigintiles = cut(PRECIP, breaks = c(-0.01,unique(quantile(fe_data_cbg_source$PRECIP,probs = seq(0,1,0.05))))))
+summary(fe_data_cbg_source$PRECIP_cuts_vigintiles)
+
+# interact the vigintiles, this is a factor for FEs
+fe_data_cbg_source <- fe_data_cbg_source %>% mutate(T_RH_PRECIP_FEs = interaction(T_cuts_vigintiles, RH_cuts_vigintiles,PRECIP_cuts_vigintiles))
+
+# Create the differences 
+fe_data_cbg_source_diff <- fe_data_cbg_source %>% filter(year==2020) %>%  mutate(T_RH_PRECIP_FEs_20 = T_RH_PRECIP_FEs,
+                  T_FE_20 = T_cuts_vigintiles, RH_FE_20 = RH_cuts_vigintiles, PRECIP_FE_20 = PRECIP_cuts_vigintiles)
+
+fe_data_cbg_source_2019 <- fe_data_cbg_source %>% filter(year==2019) %>% 
+    select(source, block_group, DOY, county, tract, sample_mean_19 = sample_mean, T_RH_PRECIP_FEs_19 = T_RH_PRECIP_FEs,
+                  T_FE_19 = T_cuts_vigintiles, RH_FE_19 = RH_cuts_vigintiles, PRECIP_FE_19 = PRECIP_cuts_vigintiles,
+           TEMP_19 = TEMP, RH_19 = RH, PRECIP_19 = PRECIP, pct_away_cbg_19 = pct_away_cbg)
+
+fe_data_cbg_source_diff <- fe_data_cbg_source_diff %>%  left_join(fe_data_cbg_source_2019) %>% 
+    mutate(sample_mean_diff = sample_mean - sample_mean_19, pct_away_diff = pct_away_cbg  - pct_away_cbg_19)  %>% 
+    drop_na(sample_mean_diff, pct_away_diff,post, ln_inc_cbg, ln_road_dens)  #%>%  filter(adj_phase==F)
+
+# clean the diff data first
+fe_data_cbg_source_diff <- fe_data_cbg_source_diff %>%   select(source, wk, block_group, tract, county, state, date,adj_phase,
+                              ln_inc_cbg, share_nonwhite_alone, share_hisp, share_black, share_asian, ln_road_dens, ln_pop_dens, 
+                              TEMP, RH, PRECIP, T_RH_PRECIP_FEs_20, TEMP_19, RH_19, PRECIP_19, T_RH_PRECIP_FEs_19,
+                              T_FE_19, T_FE_20, RH_FE_19, RH_FE_20, PRECIP_FE_19, PRECIP_FE_20,
+                              starts_with("sample_mean"), year, starts_with("pct_away"), post)  %>%  drop_na()
+
+# versions for both sources, already without adjustment phase
+fe_data_cbg_source_diff_carb <- fe_data_cbg_source_diff %>% filter(source=="CARB") %>%  filter(adj_phase==F)
+fe_data_cbg_source_diff_pa <- fe_data_cbg_source_diff %>% filter(source=="PurpleAir") %>%  filter(adj_phase==F)
+```
+
+
+Use raking to fit the marginals from the sample (CARB and PA) to the census ACS data (target). Calculate weights using detailed race/ethnic categories.
+
+```{r, get CBG data and use raking}
+load(paste0(wd_path,'/data/CA_blockgroup_metadata_6.29.20.Rdata')); EJ_cbg <- scp; rm(scp)
+
+# this is the full census data
+EJ_cbg <- EJ_cbg %>%  mutate(ln_inc_cbg = log(medincome_block_group),
+           share_nonwhite_alone = 1 - (hisp_no_white_block_group/hisp_total_block_group),
+           share_hisp = hisp_yes_block_group/hisp_total_block_group,
+           share_black =race_black_block_group/race_total_block_group, 
+          share_asian = race_asian_block_group/race_total_block_group, 
+          ln_road_dens = log(1 + (grip4_block_group_dens_m_km2)),
+          ln_pop_dens = log( 1 + race_total_block_group/(as.numeric(area_block_group)/1000^2))) %>%  
+  st_drop_geometry() %>%  as_tibble() %>%  
+  select(block_group, tract, county, state, ln_inc_cbg, share_nonwhite_alone, 
+         share_hisp, share_black, share_asian, ln_road_dens, ln_pop_dens )
+
+# have to drop NAs, this is the target distribution of CBGs
+target <- EJ_cbg <- EJ_cbg %>%  drop_na() %>% mutate(treat=1)
+
+sample <- fe_data_cbg_diff %>%   select(block_group, tract, county, state, ln_inc_cbg, share_nonwhite_alone, 
+                                        share_hisp, share_black, share_asian, ln_road_dens, ln_pop_dens )  %>% 
+  group_by(block_group, tract, county, state)  %>%  slice(1) %>% mutate(treat=0) %>% ungroup()
+
+## add CARB and PA
+sample_carb <- fe_data_cbg_source_diff_carb %>%   select(block_group, tract, county, state, ln_inc_cbg, share_nonwhite_alone, 
+                                        share_hisp, share_black, share_asian, ln_road_dens, ln_pop_dens )  %>% 
+  group_by(block_group, tract, county, state)  %>%  slice(1) %>% mutate(treat=0) %>% ungroup()
+sample_pa <- fe_data_cbg_source_diff_pa %>%   select(block_group, tract, county, state, ln_inc_cbg, share_nonwhite_alone, 
+                                        share_hisp, share_black, share_asian, ln_road_dens, ln_pop_dens )  %>% 
+  group_by(block_group, tract, county, state)  %>%  slice(1) %>% mutate(treat=0) %>% ungroup()
+
+# get quantiles (vigintiles now)
+q_any <- function(x) {unique(quantile(x, probs = seq(0, 1, by = .05), na.rm=T))}
+
+# take the sample proportions: everyone
+q_hisp <- q_any(sample$share_hisp)
+q_black <- q_any(sample$share_black)
+q_asian <- q_any(sample$share_asian)
+q_inc <- q_any(sample$ln_inc_cbg)
+q_road <- q_any(sample$ln_road_dens)
+q_pop <- q_any(sample$ln_pop_dens)
+
+# the get the distribution of those quantiles in the ACS data
+target <- target %>% mutate(hisp_cut= cut(share_hisp, breaks=q_hisp, include.lowest=T, na.rm=T, right=F),
+                            black_cut= cut(share_black, breaks=q_black, include.lowest=T, na.rm=T, right=F),
+                            asian_cut= cut(share_asian, breaks=q_asian, include.lowest=T, na.rm=T, right=F),
+                            inc_cut= cut(ln_inc_cbg, breaks=q_inc, include.lowest=T, na.rm=T, right=F),
+                            road_cut= cut(ln_road_dens, breaks=q_road, include.lowest=T, na.rm=T, right=F),
+                            pop_cut= cut(ln_pop_dens, breaks=q_pop, include.lowest=T, na.rm=T, right=F))
+
+# take a look
+table(target$hisp_cut, useNA = "ifany")
+table(target$black_cut, useNA = "ifany")
+table(target$asian_cut, useNA = "ifany")
+table(target$inc_cut, useNA = "ifany")
+table(target$road_cut, useNA = "ifany")
+table(target$pop_cut, useNA = "ifany")
+
+# merge to sample
+sample <- sample %>%  
+  left_join(target %>% select(block_group,ends_with("cut")))
+
+
+# take a look at final data
+table(sample$hisp_cut, useNA = "ifany")
+table(sample$black_cut, useNA = "ifany")
+table(sample$asian_cut, useNA = "ifany")
+table(sample$inc_cut, useNA = "ifany")
+table(sample$road_cut, useNA = "ifany")
+table(sample$pop_cut, useNA = "ifany")
+
+# set the survey design
+des.clst <- svydesign(id=~block_group, weights=~1, data=sample)
+des.clst.rep <- as.svrepdesign(des.clst)
+
+# matches
+svymean(~share_black, des.clst.rep)
+mean(sample$share_black)
+
+## population marginals for each stratum
+pop.hisp_cut <- as.data.frame(table(target$hisp_cut)) 
+names(pop.hisp_cut) <- c("hisp_cut","Freq")
+pop.black_cut <- as.data.frame(table(target$black_cut)) 
+names(pop.black_cut) <- c("black_cut","Freq")
+pop.asian_cut <- as.data.frame(table(target$asian_cut)) 
+names(pop.asian_cut) <- c("asian_cut","Freq")
+pop.inc_cut <- as.data.frame(table(target$inc_cut)) 
+names(pop.inc_cut) <- c("inc_cut","Freq")
+pop.road_cut <- as.data.frame(table(target$road_cut)) 
+names(pop.road_cut) <- c("road_cut","Freq")
+pop.pop_cut <- as.data.frame(table(target$pop_cut)) 
+names(pop.pop_cut) <- c("pop_cut","Freq")
+
+# run the raking algorithm
+raked.des.clst.rep <- rake(des.clst.rep, list(~hisp_cut,~black_cut,~asian_cut,~inc_cut, ~road_cut, ~pop_cut), 
+                list(pop.hisp_cut, pop.black_cut, pop.asian_cut, pop.inc_cut, pop.road_cut, pop.pop_cut),
+                control = list(maxit = 50, epsilon = 1, verbose=F))
+
+# compare the weighted and unweighted means
+svymean(~share_black, des.clst.rep)
+svymean(~share_black, raked.des.clst.rep)
+
+# copy weights to sample data
+sample$post_weights <- raked.des.clst.rep$pweights
+
+## assign weights to full data
+fe_data_cbg_diff <- fe_data_cbg_diff %>%  left_join(sample %>% select(block_group, tract, county, state, post_weights))
+## Plot weights distribution by sensor type
+fe_data_cbg_source_diff <- fe_data_cbg_source_diff %>%  left_join(sample %>% select(block_group, tract, county, state, post_weights))
+
+```
+
+Create the difference data
+
+```{r diff data PM2.5}
+## baseline PM2.5 post shutdown in 2019 after weighting
+fe_data_cbg_diff <- fe_data_cbg_diff %>% filter(adj_phase==F)
+
+fe_data_cbg_diff %>% group_by(post) %>%  summarize(sample_mean_19 =weighted.mean(sample_mean_19, w= post_weights), sample_mean_20 =weighted.mean(sample_mean, w= post_weights))
+
+fe_data_cbg_diff %>% 
+  group_by(post) %>%  
+  summarize(sample_mean_19_q1 =wtd.quantile(sample_mean_19, q=0.1, w= post_weights),
+            sample_mean_19_q9 =wtd.quantile(sample_mean_19, q=0.9, w= post_weights),
+            sample_mean_20_q1 =wtd.quantile(sample_mean, q=0.1, w= post_weights),
+            sample_mean_20_q9 =wtd.quantile(sample_mean, q=0.9, w= post_weights)) %>% 
+  mutate(q_1_9_2020 = sample_mean_20_q9 - sample_mean_20_q1, q_1_9_2019 = sample_mean_19_q9 - sample_mean_19_q1)
+```
+
+Run the models for income, road density, pop density and white/non-HL
+
+```{r try no-white stuff again first}
+rel.f1.base <- Formula(sample_mean_diff ~ 0 | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date  | 0 | county)
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg )
+fe_m0_inc <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens )
+fe_m0_road <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens )
+fe_m0_pop <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff )
+fe_m0_mob <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)
+
+rel.f1.base <- Formula(sample_mean_diff ~ post:share_nonwhite_alone  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+
+fe_m0 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff)
+fe_m1 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m2 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m3 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+fe_m5 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.base <- Formula(sample_mean_diff ~ post:share_nonwhite_alone  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff | block_group + date  | 0 | county)
+fe_m6 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights)  
+
+## make table
+stargazer(fe_m0_mob, fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff", "pct_away"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 11)),
+                         c("Day FEs" , rep("Yes", 11)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 9), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 9), "No", "Yes")))
+
+startab <- stargazer(fe_m0_mob, fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff", "pct_away"),
+          report = c("vcs*"), type="latex",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 11)),
+                         c("Day FEs" , rep("Yes", 11)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 9), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 9), "No", "Yes")))
+
+cat(startab, file=paste0(wd_path,"/figures/table_S2.tex"), sep="\n" )
+```
+
+```{r arrange for new figure non white}
+m0_mob_df <- tidy(fe_m0_mob, conf.int = T) %>% filter(term == "pct_away_diff")  %>% mutate(model = "Mobility", order=1L)
+m0_inc_df <- tidy(fe_m0_inc, conf.int = T) %>% filter(term == "post:ln_inc_cbg")  %>% mutate(model = "Income", order=2L)
+m0_road_df <- tidy(fe_m0_road, conf.int = T) %>% filter(term == "post:ln_road_dens")  %>% mutate(model = "Road Density", order=3L)
+m0_pop_df <- tidy(fe_m0_pop, conf.int = T) %>% filter(term == "post:ln_pop_dens")  %>% mutate(model = "Pop. Density", order=4L)
+
+all_single_models <- rbind(m0_mob_df, m0_inc_df, m0_road_df, m0_pop_df)
+
+touse <- "post:share_nonwhite_alone"
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model ="Base", order=5L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "  w/ Mobility", order=6L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "  w/ Income", order=7L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>% mutate(model ="  w/ Road Density", order=8L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "  w/ Pop. Density", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=11L)
+m6_df <- tidy(fe_m6, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "  w/o Weather", order=10L)
+
+all_multi_models <- rbind(m6_df, m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+all_models <- rbind(all_single_models,all_multi_models) %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+```
+
+New version of main figure, panel A
+
+```{r, non-white plot daily PM2.5}
+
+# load data, replace later
+df <- all_models %>% dplyr::rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2))
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_nonwhite_alone", 1, NA))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 2, neworder))
+
+df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 7.5, colour="grey70", linetype="dashed", size = 0.3) +
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                 "post:ln_pop_dens", "post:share_nonwhite_alone"), 
+                        values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                 "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                 "post:share_nonwhite_alone" = "#78bea2")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+    xlim(-6, 4) +
+    theme_fig2() + xlab("Estimated effect on change in PM2.5") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/Fig3_panelAC.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+
+Battery of models on weighted data.
+
+```{r differenced, simple}
+rel.f1.base <- Formula(sample_mean_diff ~ post:share_hisp +  post:share_asian  + post:share_black  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+
+fe_m0 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff)
+fe_m1 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m2 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m3 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+fe_m5 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.base <- Formula(sample_mean_diff ~ post:share_hisp  + post:share_asian  + post:share_black + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff | block_group + date  | 0 | county)
+fe_m6 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights)  
+
+## make table
+stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff", "pct_away"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 7)),
+                         c("Day FEs" , rep("Yes", 7)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 5), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 5), "No", "Yes")))
+
+startab <- stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff", "pct_away"),
+          report = c("vcs*"), type="latex",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 7)),
+                         c("Day FEs" , rep("Yes", 7)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 5), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 5), "No", "Yes")))
+
+cat(startab, file=paste0(wd_path,"/figures/table_S3.tex"), sep="\n" )
+# add models for predictions, 
+rel.resid <- Formula(sample_mean_diff ~ post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date  | 0 | county)
+fe_resid <- felm(data=fe_data_cbg_diff, formula=rel.resid) 
+stargazer(fe_resid, type="text")
+
+fe_data_cbg_diff$resid_all <- fe_resid$residuals
+fe_data_cbg_diff
+
+# for_susis_map <- fe_data_cbg_diff %>% group_by(block_group,post) %>%  
+#   summarize(resid  = mean(resid_all, na.rm=T)) %>% 
+#   pivot_wider(id_cols = block_group, values_from = resid, names_from = post) %>% 
+#   rename(pre_resid =2, post_resid =3) %>% mutate(did_resid = post_resid  - pre_resid)
+
+fe_data_cbg_diff %>% group_by(block_group) %>%  slice(1) %>%  ungroup() %>% dplyr::summarize(n=n())
+
+# write_csv(for_susis_map, "for_susis_map_pm25.csv")
+# drive_upload("for_susis_map_pm25.csv", path = "UCSD_COVID_AIR/Data/for_susis_map_pm25.csv", overwrite=T)
+
+save(sample, file=paste0(wd_path,"/data/weights.Rdata"))
+## assign weights to full data
+fe_data_cbg_diff <- fe_data_cbg_diff %>%  left_join(sample %>% select(block_group, tract, county, state, post_weights))
+## Plot weights distribution by sensor type
+fe_data_cbg_source_diff <- fe_data_cbg_source_diff %>%  left_join(sample %>% select(block_group, tract, county, state, post_weights))
+```
+
+Arrange data  for plotting.
+
+```{r arrange data daily PM2.5}
+
+touse <- c( "post:share_hisp", "post:share_asian", "post:share_black")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=5L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Mobility", order=6L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=7L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=8L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=11L)
+m6_df <- tidy(fe_m6, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=10L)
+
+all_multi_models <- rbind(m6_df, m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+all_models <- all_multi_models %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+```
+
+Now publication ready plot of panel A:
+
+```{r, pretty plot daily PM2.5}
+
+# load data, replace later
+df <- all_models %>% dplyr::rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2))
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_asian", 2, NA))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_black", 1, neworder))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_hisp", 3, neworder))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 4, neworder))
+
+
+df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("post:share_asian", "post:share_black","post:share_hisp"), 
+                        values=c("post:share_asian" = "#78bea2", "post:share_black"="salmon", 
+                                 "post:share_hisp"="#655643")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+    xlim(-6, 4) +
+  theme_fig2() + xlab("Estimated effect on change in PM2.5") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/Fig3_panelE.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+
+
+Figure 3 mobility panels. Same sample for consistency. Income to white, nonHL first.
+
+```{r mobility daily non-white HL}
+
+### multiply this by 100?
+
+fe_data_cbg_diff %>% group_by(post) %>%  summarize(pct_away_cbg_19 =weighted.mean(pct_away_cbg_19, w= post_weights), 
+                                                   pct_away_cbg_20 =weighted.mean(pct_away_cbg, w= post_weights))
+
+rel.f1.base <- Formula(pct_away_diff ~ 0 | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date  | 0 | county)
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg )
+fe_m0_inc <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens )
+fe_m0_road <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens )
+fe_m0_pop <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.base <- Formula(pct_away_diff ~  post:share_nonwhite_alone | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+
+fe_m0 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m1 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m2 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m3 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.base <- Formula(pct_away_diff ~ post:share_nonwhite_alone  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens | block_group + date  | 0 | county)
+fe_m5 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights)  
+
+stargazer(fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m5,fe_m4, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: Mobility",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="% away from home, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 9)),
+                         c("Day FEs" , rep("Yes", 9)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 7), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 7), "No", "Yes")))
+
+## make table
+startab <- stargazer(fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m5,fe_m4, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="latex",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: Mobility",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="% away from home, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 9)),
+                         c("Day FEs" , rep("Yes", 9)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 7), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 7), "No", "Yes")))
+
+cat(startab, file=paste0(wd_path,"/figures/table_S4.tex"), sep="\n" )
+
+
+```
+
+Now plot Figure 3 panel B
+
+Arrange for plot and plot.
+
+```{r arrange mobility data daily NWA}
+touse <- c( "post:share_nonwhite_alone")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=4L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=5L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=6L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=7L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=8L)
+
+all_multi_models <- rbind(m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+m0_inc_df <- tidy(fe_m0_inc, conf.int = T) %>% filter(term == "post:ln_inc_cbg")  %>% mutate(model = "Income", order=1L)
+m0_road_df <- tidy(fe_m0_road, conf.int = T) %>% filter(term == "post:ln_road_dens")  %>% mutate(model = "Road Density", order=2L)
+m0_pop_df <- tidy(fe_m0_pop, conf.int = T) %>% filter(term == "post:ln_pop_dens")  %>% mutate(model = "Pop. Density", order=3L)
+
+all_single_models <- rbind(m0_inc_df, m0_road_df, m0_pop_df)
+
+all_models <- rbind(all_single_models,all_multi_models) %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+
+df <- all_models %>% dplyr::rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2)) %>% 
+  mutate(beta=100*beta, se = 100*se, lb = 100*lb, ub = 100*ub)
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_nonwhite_alone", 1, NA))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 2, neworder))
+
+df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 6.5, colour="grey70", linetype="dashed", size = 0.3) +
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                 "post:ln_pop_dens", "post:share_nonwhite_alone"), 
+                        values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                 "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                 "post:share_nonwhite_alone" = "#78bea2")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+    xlim(-32, 20) +
+  theme_fig2() +  xlab("Estimated effect on change in mobility") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/Fig3_panelBD.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+Now the decomposition, new Figure 4 panel B:
+
+```{r mobility daily}
+
+### multiply this by 100?
+
+rel.f1.base <- Formula(pct_away_diff ~  post:share_hisp  + post:share_asian + post:share_black | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+
+fe_m0 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m1 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m2 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m3 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+rel.f1.base <- Formula(pct_away_diff ~ post:share_hisp + post:share_asian + post:share_black  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens | block_group + date  | 0 | county)
+fe_m5 <- felm(data=fe_data_cbg_diff, rel.f1.base, weights = fe_data_cbg_diff$post_weights)  
+
+## make table
+stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m5,fe_m4, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: Mobility",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="% away from home, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 6)),
+                         c("Day FEs" , rep("Yes", 6)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 4), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 4), "No", "Yes")))
+
+startab <- stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m5,fe_m4, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="latex",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: Mobility",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="% away from home, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 6)),
+                         c("Day FEs" , rep("Yes", 6)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 4), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 4), "No", "Yes")))
+
+cat(startab, file=paste0(wd_path,"/figures/table_S5.tex"), sep="\n" )
+
+
+```
+
+Arrange for plot and plot.
+
+```{r arrange mobility data daily}
+touse <- c( "post:share_hisp", "post:share_asian", "post:share_black")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=4L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=5L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=6L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=7L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=8L)
+
+all_multi_models <- rbind(m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+all_models <- all_multi_models %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+
+# load data, replace later
+df <- all_models  %>% dplyr::rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2)) %>% 
+  mutate(beta=100*beta, se = 100*se, lb = 100*lb, ub = 100*ub)
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_asian", 2, NA))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_black", 1, neworder))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_hisp", 3, neworder))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 4, neworder))
+
+
+df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  dplyr::mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                 "post:ln_pop_dens", "post:share_asian", "post:share_black","post:share_hisp"), 
+                        values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                 "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                 "post:share_asian" = "#78bea2", "post:share_black"="salmon", 
+                                 "post:share_hisp"="#655643")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+  xlim(-32, 20) +
+  theme_fig2() + xlab("Estimated effect on change in mobility") + ylab("") 
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/Fig3_panelF.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+
+Figure S2, right panels. All the densities. Target, unweighted, weighted.
+
+```{r densities witout labels}
+
+
+xvars <- c("share_hisp", "share_asian", "share_black", "share_nonwhite_alone", "ln_inc_cbg", "ln_pop_dens", "ln_road_dens")
+xnames <- c("% Hispanic/Latinx", "% Asian", "% Black", "% White, non-Hispanic/Latinx", "Income", "Population Density", "Road Density")
+
+for(i in 1:length(xvars)) {
+    # plot densities, use theme_fig3 to display labels and theme_fig4() to dave without
+    var <- xvars[i]
+    varlab <- xnames[i]
+    final <- ggplot()  + theme_fig3() +
+        geom_density(data=target, aes_string(var), color =  "black") + 
+        geom_density(data=sample, aes_string(var), color = "darkorange4") +
+          geom_density(data=sample, aes_string(var, weight="post_weights"), color = "red") +
+          geom_density(data=sample_carb, aes_string(var), color = "forestgreen") +
+          geom_density(data=sample_pa, aes_string(var), color = "darkorchid") + ylab("Density") + xlab(varlab)
+    
+    plot(final)
+    ggsave(final + theme_fig3(), file = paste0(wd_path,"figures/FigED9_panel", LETTERS[i],"_right.pdf"), width = 2.7559, height = 1.4436 )
+}
+```
+
+```{r figureS2 coefficients}
+# re-plot pm2.5
+fe_data_cbg_diff <- fe_data_cbg_diff %>% filter(adj_phase==F)
+fe_data_cbg_source_diff_carb <- fe_data_cbg_source_diff_carb %>% filter(adj_phase==F)
+fe_data_cbg_source_diff_pa <- fe_data_cbg_source_diff_pa %>% filter(adj_phase==F)
+
+rel.f1.base <- Formula(sample_mean_diff ~   post:share_hisp +  post:share_asian  + post:share_black  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19  +block_group + date   | 0 | county   )
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+
+fe_m0_both_carb <- felm(data=fe_data_cbg_source_diff_carb, rel.f1.curent)
+fe_m0_both_pa <- felm(data=fe_data_cbg_source_diff_pa, rel.f1.curent)  
+fe_m0_both_unweighted <- felm(data=fe_data_cbg_diff, rel.f1.curent)  
+fe_m0_both_weighted <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights)  
+
+## make table
+stargazer(fe_m0_both_carb, fe_m0_both_pa, fe_m0_both_unweighted, fe_m0_both_weighted, keep = c("post:", ":post", "pct_away_diff", "pct_away"),
+          report = c("vcs*"), type="text", dep.var.labels = "", column.labels =  c("CARB", "PA", "CARB+PA", "Weighted"),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, daily, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 4)),
+                         c("Day FEs" , rep("Yes", 4)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 4), "No"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 4), "No")))
+
+## try to turn these into a figure
+m0_df <- tidy(fe_m0_both_carb) %>% filter(str_detect(term, 'post:'), !is.na(estimate)) %>% mutate(model = "CARB")
+m1_df <- tidy(fe_m0_both_pa) %>% filter(str_detect(term, 'post:'), !is.na(estimate)) %>% mutate(model = "PurpleAir")
+m2_df <- tidy(fe_m0_both_unweighted) %>% filter(str_detect(term, 'post:'), !is.na(estimate)) %>% mutate(model = "CARB+PA")
+m3_df <- tidy(fe_m0_both_weighted) %>% filter(str_detect(term, 'post:'), !is.na(estimate)) %>% mutate(model = "CARB+PA Weighted")
+
+all_models <- rbind(m3_df,m2_df,m1_df, m0_df) 
+require(dotwhisker)
+final <- dwplot(all_models,  dodge_size = 0.8, whisker_args =  list(colour = "grey39", size = 0.2), dot_args = list(alpha = 0.9, size = 1),
+      ) %>% #    + theme_bw() + 
+   relabel_predictors(c("post:share_hisp"  = "% Hispanic/Latinx",                       
+                         "post:share_asian" = "% Asian", 
+                         "post:share_black" = "% Black",
+                        "post:ln_inc_cbg" = "Income",
+                        "post:ln_road_dens" = "Road Density",
+                        "post:ln_pop_dens" = "Population Density")) +
+  xlim(-7,3.5) +  
+  xlab("Estimated change in PM2.5 after shutdown") + 
+    #geom_vline(xintercept = 0, colour = "grey70", linetype = 1, size=0.3) +
+   #scale_color_brewer(palette="Set1") + 
+  theme_fig3() + #change to 3 to get useful labels
+  scale_color_manual(values=c("red","darkorange4","darkorchid","forestgreen")) + 
+   # ggtitle("Difference-in-difference estimates") +
+    theme(plot.title = element_text(face="bold") )
+
+plot(final)
+# save without labels and pull these apart using Illustrator 
+ggsave(final + theme_fig4(), file = paste0(wd_path,"/figures/FigED9_left.pdf"), width = 2.7559 , height = 2.1) 
+
+```
+
+
+
+
+Figure S2 on weights per source.
+
+```{r supplement weights}
+weightsplot <- ggplot(fe_data_cbg_source_diff, aes(x=post_weights, color=source)) +  theme_fig3() + 
+  geom_density() +  
+  xlab("Weights") + ylab("Density") + labs(color = "Sensor") + 
+  scale_color_manual(values=c("forestgreen", "darkorchid"))
+ggsave(weightsplot, file = paste0(wd_path,"/figures/FigED2_panelC.pdf"), width = 5, height = 2 )
+```
+
+Table S1. Main result across six samples (CARB, PA, both; unweighted, weighted). MOVE DOWN!
+
+```{r supplement table weighting vs nonweighted}
+
+fe_data_cbg_diff <- fe_data_cbg_diff %>% filter(adj_phase==F)
+fe_data_cbg_source_diff_carb <- fe_data_cbg_source_diff_carb %>% filter(adj_phase==F)
+fe_data_cbg_source_diff_pa <- fe_data_cbg_source_diff_pa %>% filter(adj_phase==F)
+
+## Table comparing 2019 to 2020 results
+
+rel.f1.base <- Formula(sample_mean_diff ~ post:share_hisp +  post:share_asian  + post:share_black  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+
+fe_m0_both_carb <- felm(data=fe_data_cbg_source_diff_carb, rel.f1.curent)
+fe_m0_both_pa <- felm(data=fe_data_cbg_source_diff_pa, rel.f1.curent)  
+fe_m0_both_unweighted <- felm(data=fe_data_cbg_diff, rel.f1.curent)  
+fe_m0_both_weighted <- felm(data=fe_data_cbg_diff, rel.f1.curent, weights = fe_data_cbg_diff$post_weights) 
+
+fe_m0_both_nocontrols <- felm(sample_mean_diff ~ post:share_hisp +  post:share_asian  + post:share_black | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county, data=fe_data_cbg_diff)
+
+fe_m0_2020_nocontrols <- felm(sample_mean ~ post:share_hisp +  post:share_asian  + post:share_black | T_RH_PRECIP_FEs_20 + block_group + date   | 0 | county, data=fe_data_cbg_diff)
+
+fe_m0_2020_unweighted <- felm(sample_mean ~ post:share_hisp +  post:share_asian  + post:share_black + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_cbg | T_RH_PRECIP_FEs_20 + block_group + date   | 0 | county, data=fe_data_cbg_diff)
+
+fe_m0_2020_weighted <- felm(sample_mean ~ post:share_hisp +  post:share_asian  + post:share_black + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_cbg | T_RH_PRECIP_FEs_20 + block_group + date   | 0 | county, data=fe_data_cbg_diff, weights = fe_data_cbg_diff$post_weights)
+
+stargazer(fe_m0_both_nocontrols,fe_m0_both_unweighted,fe_m0_both_weighted,fe_m0_2020_nocontrols,fe_m0_2020_unweighted,fe_m0_2020_weighted, 
+          type = "text",
+          covariate.labels = c("Mobility","Mobility","% hispanic latinx","% asian","% black","income","road density","population density"),
+          dep.var.labels.include = FALSE,
+          column.labels   = c("Difference PM2.5", "2020 PM2.5"),
+          column.separate = c(3, 3),
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, all CA, Difference vs 2020 values", align=F,
+          add.lines=list(c("Weighted","No","No","Yes","No","No","Yes"),c("CBG FEs" , rep("Yes", 6)),
+                         c("Day FEs" , rep("Yes", 6)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 3), rep("No",3)),
+                         c("P(T,RH,P) 2020" , rep("Yes", 6))))
+
+startab <- stargazer(fe_m0_both_nocontrols,fe_m0_both_unweighted,fe_m0_both_weighted,fe_m0_2020_nocontrols,fe_m0_2020_unweighted,fe_m0_2020_weighted, 
+          type = "latex",
+          covariate.labels = c("Mobility","Mobility","% hispanic latinx","% asian","% black","income","road density","population density"),
+          dep.var.labels.include = FALSE,
+          column.labels   = c("Difference PM2.5", "2020 PM2.5"),
+          column.separate = c(3, 3),
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="PM2.5, all CA, Difference vs 2020 values", align=F,
+          add.lines=list(c("Weighted","No","No","Yes","No","No","Yes"),c("CBG FEs" , rep("Yes", 6)),
+                         c("Day FEs" , rep("Yes", 6)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 3), rep("No",3)),
+                         c("P(T,RH,P) 2020" , rep("Yes", 6))))
+
+cat(startab, file=paste0(wd_path,"/figures/table_S8.tex"), sep="\n" )
+
+```
+
+
+Figure S6. NO2 via weekly satellite data.
+
+```{r sat data}
+
+# create FEs and interactions in vigintiles
+fe_sat_data_cbg_weekly <- fe_sat_data_cbg_weekly %>% drop_na(TEMP,RH, PRECIP)
+fe_sat_data_cbg_weekly <- fe_sat_data_cbg_weekly %>% mutate(T_cuts_vigintiles = cut(TEMP, breaks = quantile(fe_sat_data_cbg_weekly$TEMP,probs = seq(0,1,0.05))))
+summary(fe_sat_data_cbg_weekly$T_cuts_vigintiles)
+fe_sat_data_cbg_weekly <- fe_sat_data_cbg_weekly %>% mutate(RH_cuts_vigintiles = cut(RH, breaks = quantile(fe_sat_data_cbg_weekly$RH,probs = seq(0,1,0.05))))
+summary(fe_sat_data_cbg_weekly$RH_cuts_vigintiles)
+fe_sat_data_cbg_weekly <- fe_sat_data_cbg_weekly %>% mutate(PRECIP_cuts_vigintiles = cut(PRECIP, breaks = c(-0.01,unique(quantile(fe_sat_data_cbg_weekly$PRECIP,probs = seq(0,1,0.05))))))
+summary(fe_sat_data_cbg_weekly$PRECIP_cuts_vigintiles)
+
+fe_sat_data_cbg_weekly <- fe_sat_data_cbg_weekly %>% mutate(T_RH_PRECIP_FEs = interaction(T_cuts_vigintiles, RH_cuts_vigintiles,PRECIP_cuts_vigintiles))
+
+fe_sat_data_cbg_weekly_diff<-fe_sat_data_cbg_weekly %>% filter(year==2020) %>% 
+  mutate(post = as.numeric(date_last > ca_emergency), T_RH_PRECIP_FEs_20 = T_RH_PRECIP_FEs,
+                  T_FE_20 = T_cuts_vigintiles, RH_FE_20 = RH_cuts_vigintiles, PRECIP_FE_20 = PRECIP_cuts_vigintiles) %>%  
+    filter(!(date_last > ca_emergency & date_first < ca_shelter))
+fe_sat_data_cbg_weekly_2019<-fe_sat_data_cbg_weekly %>% 
+  filter(year==2019) %>% 
+  select(block_group, wk, county, tract, AOD_19 =AOD, 
+         NO2_1e6_19 = NO2_1e6, T_RH_PRECIP_FEs_19 = T_RH_PRECIP_FEs, 
+         T_FE_19 = T_cuts_vigintiles, RH_FE_19 = RH_cuts_vigintiles, PRECIP_FE_19 = PRECIP_cuts_vigintiles,
+         TEMP_19 = TEMP, RH_19 = RH, PRECIP_19 = PRECIP, pct_away_cbg_19 = pct_away_cbg)
+fe_sat_data_cbg_weekly_diff <- fe_sat_data_cbg_weekly_diff %>%  left_join(fe_sat_data_cbg_weekly_2019) %>% 
+    mutate(AOD_diff = AOD - AOD_19, NO2_diff = NO2_1e6 - NO2_1e6_19, pct_away_diff = pct_away_cbg  - pct_away_cbg_19) %>%  
+  drop_na(PRECIP, RH, TEMP, pct_away_diff, NO2_diff, ln_inc_cbg, ln_road_dens)
+
+fe_sat_data_cbg_weekly_diff<-fe_sat_data_cbg_weekly %>% filter(year==2020) %>% 
+  mutate(post = as.numeric(date_last > ca_emergency), T_RH_PRECIP_FEs_20 = T_RH_PRECIP_FEs,
+                  T_FE_20 = T_cuts_vigintiles, RH_FE_20 = RH_cuts_vigintiles, PRECIP_FE_20 = PRECIP_cuts_vigintiles) %>%  
+    filter(!(date_last > ca_emergency & date_first < ca_shelter))
+fe_sat_data_cbg_weekly_2019 <- fe_sat_data_cbg_weekly %>% 
+  filter(year==2019) %>% 
+  select(block_group, wk, county, tract, AOD_19 =AOD,
+         NO2_1e6_19 = NO2_1e6, T_RH_PRECIP_FEs_19 = T_RH_PRECIP_FEs, 
+         T_FE_19 = T_cuts_vigintiles, RH_FE_19 = RH_cuts_vigintiles, PRECIP_FE_19 = PRECIP_cuts_vigintiles,
+         TEMP_19 = TEMP, RH_19 = RH, PRECIP_19 = PRECIP, pct_away_cbg_19 = pct_away_cbg)
+fe_sat_data_cbg_weekly_diff <- fe_sat_data_cbg_weekly_diff %>%  left_join(fe_sat_data_cbg_weekly_2019) %>% 
+    mutate(NO2_diff = NO2_1e6 - NO2_1e6_19, pct_away_diff = pct_away_cbg  - pct_away_cbg_19) %>% 
+   drop_na(NO2_diff, pct_away_diff, share_hisp, share_asian, share_black,ln_inc_cbg, ln_road_dens, TEMP, RH, PRECIP) 
+#%>%    drop_na(PRECIP, RH, TEMP, pct_away_diff, NO2_diff, ln_inc_cbg, ln_road_dens)
+```
+
+Aggregated version with non-white only
+
+```{r NO2 nonwhite only models}
+rel.f1.base <- Formula(NO2_diff ~ 0 | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19   + block_group + wk  | 0 | county)
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg )
+fe_m0_inc <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens )
+fe_m0_road <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens )
+fe_m0_pop <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff )
+fe_m0_mob <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)
+
+rel.f1.base <- Formula(NO2_diff ~ post:share_nonwhite_alone | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19  + block_group + wk   | 0 | county   )
+
+fe_m0 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff)
+fe_m1 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m2 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m3 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+fe_m5 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.base <- Formula(NO2_diff ~ post:share_nonwhite_alone  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff| block_group + wk  | 0 | county)
+fe_m6 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base)  
+
+## make table
+stargazer(fe_m0_mob, fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: NO2 in μmol/m^2",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="NO2 μmol/m2, weekly, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 11)),
+                         c("Day FEs" , rep("Yes", 11)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 9), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 9), "No", "Yes")))
+
+startab <- stargazer(fe_m0_mob, fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, 
+                     keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="latex",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: NO2 in μmol/m^2",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="NO2 μmol/m2, weekly, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 11)),
+                         c("Day FEs" , rep("Yes", 11)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 9), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 9), "No", "Yes")))
+
+cat(startab, file=paste0(wd_path,"/figures/table_S6.tex"), sep="\n" )
+
+```
+New plot for non-white-alone
+
+```{r plot not-white weekly no2}
+m0_mob_df <- tidy(fe_m0_mob, conf.int = T) %>% filter(term == "pct_away_diff")  %>% mutate(model = "Mobility", order=1L)
+m0_inc_df <- tidy(fe_m0_inc, conf.int = T) %>% filter(term == "post:ln_inc_cbg")  %>% mutate(model = "Income", order=2L)
+m0_road_df <- tidy(fe_m0_road, conf.int = T) %>% filter(term == "post:ln_road_dens")  %>% mutate(model = "Road Density", order=3L)
+m0_pop_df <- tidy(fe_m0_pop, conf.int = T) %>% filter(term == "post:ln_pop_dens")  %>% mutate(model = "Pop. Density", order=4L)
+
+all_single_models <- rbind(m0_mob_df, m0_inc_df, m0_road_df, m0_pop_df)
+
+touse <- c( "post:share_nonwhite_alone")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=5L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Mobility", order=6L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=7L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=8L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=11L)
+m6_df <- tidy(fe_m6, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=10L)
+
+all_multi_models <- rbind(m6_df, m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+all_models <- rbind(all_single_models,all_multi_models) %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+
+# load data, replace later
+df <- all_models %>% rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2))
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_nonwhite_alone", 1, NA))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 2, neworder))
+
+df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 7.5, colour="grey70", linetype="dashed", size = 0.3) +
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                 "post:ln_pop_dens", "post:share_nonwhite_alone"), 
+                        values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                 "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                 "post:share_nonwhite_alone" = "#78bea2")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+  xlim(-70,30) +
+  theme_fig2() +  xlab("Estimated effect on change in NO2") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/FigED3_panelAC.pdf"), width = 5.25, height = 2.5*1.1) 
+```
+Disaggregated version with many groups
+```{r NO2 models disaggregated}
+
+rel.f1.base <- Formula(NO2_diff ~ post:share_hisp  + post:share_asian  + post:share_black | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19  + block_group + wk   | 0 | county   )
+
+fe_m0 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff)
+fe_m1 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m2 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m3 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+fe_m5 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.base <- Formula(NO2_diff ~ post:share_hisp + post:share_asian + post:share_black  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff| block_group + wk  | 0 | county)
+fe_m6 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base)  
+
+## make table
+stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: NO2 in μmol/m^2",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="NO2 μmol/m2, weekly, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 7)),
+                         c("Day FEs" , rep("Yes", 7)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 5), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 5), "No", "Yes")))
+                         
+startab <- stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m6, fe_m5, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="latex",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: NO2 in μmol/m^2",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="NO2 μmol/m2, weekly, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 7)),
+                         c("Day FEs" , rep("Yes", 7)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 5), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 5), "No", "Yes")))
+cat(startab, file=paste0(wd_path,"/figures/table_S7.tex"), sep="\n" )
+```
+
+Arrange NO2 data for plotting
+
+```{r arrange data weekly no2}
+touse <- c( "post:share_hisp", "post:share_asian", "post:share_black")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "None", order=5L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Mobility", order=6L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=7L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=8L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=11L)
+m6_df <- tidy(fe_m6, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=10L)
+
+all_multi_models <- rbind(m6_df, m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+all_models <- all_multi_models %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+
+# load data, replace later
+df <- all_models %>% rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2))
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_asian", 2, NA))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_black", 1, neworder))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_hisp", 3, neworder))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 4, neworder))
+
+
+df <- df %>%  group_by(neworder) %>% mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("post:share_asian", "post:share_black","post:share_hisp"), 
+                        values=c("post:share_asian" = "#78bea2", "post:share_black"="salmon", 
+                                 "post:share_hisp"="#655643")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+  xlim(-70,30) +
+    theme_fig2() + xlab("Estimated effect on change in NO2") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/FigED3_panelE.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+
+Figure S6 Non-white-alone version
+
+```{r mobility weekly nwa}
+
+rel.f1.base <- Formula(pct_away_diff ~ 0 | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19  + block_group + wk  | 0 | county)
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg )
+fe_m0_inc <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens )
+fe_m0_road <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens )
+fe_m0_pop <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.base <- Formula(pct_away_diff ~  post:share_nonwhite_alone  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19  + block_group + wk   | 0 | county   )
+
+fe_m0 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m1 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m2 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m3 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.base <- Formula(pct_away_diff ~ post:share_nonwhite_alone + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens | block_group + wk  | 0 | county)
+fe_m5 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base)  
+
+## make table
+stargazer(fe_m0_inc, fe_m0_road, fe_m0_pop, fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m5, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="% away from home, weekly, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 9)),
+                         c("Week FEs" , rep("Yes", 9)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 7), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 7), "No", "Yes")))
+
+```
+
+Arrange for plot.
+
+```{r arrange mobility data weekly nwa}
+touse <- c( "post:share_nonwhite_alone")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=4L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=5L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=6L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=7L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=8L)
+
+all_multi_models <- rbind(m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+m0_inc_df <- tidy(fe_m0_inc, conf.int = T) %>% filter(term == "post:ln_inc_cbg")  %>% mutate(model = "Income", order=1L)
+m0_road_df <- tidy(fe_m0_road, conf.int = T) %>% filter(term == "post:ln_road_dens")  %>% mutate(model = "Road Density", order=2L)
+m0_pop_df <- tidy(fe_m0_pop, conf.int = T) %>% filter(term == "post:ln_pop_dens")  %>% mutate(model = "Pop. Density", order=3L)
+
+all_single_models <- rbind(m0_inc_df, m0_road_df, m0_pop_df)
+
+all_models <- rbind(all_single_models,all_multi_models) %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+```
+
+Figure for non-white-alone
+
+```{r, pretty plot weekly mobility NWA}
+
+# load data, replace later
+df <- all_models %>% rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2))
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_nonwhite_alone", 1, NA))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 2, neworder))
+
+df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 18.5, colour="grey70", linetype="dashed", size = 0.3) +
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                 "post:ln_pop_dens", "post:share_nonwhite_alone"), 
+                        values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                 "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                 "post:share_nonwhite_alone" = "#78bea2")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+  xlim(-0.12,0.17) +
+    theme_fig2() + xlab("Estimated effect on change in mobility") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/FigED3_panelBD.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+
+Figure S6 Panel d. Weekly mobility. This is the complete data.
+
+```{r mobility weekly}
+rel.f1.base <- Formula(pct_away_diff ~  post:share_hisp + post:share_asian + post:share_black  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19  + block_group + wk   | 0 | county   )
+
+fe_m0 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+fe_m1 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+fe_m2 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent) 
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+fe_m3 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens)
+fe_m4 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.curent)  
+
+rel.f1.base <- Formula(pct_away_diff ~ post:share_hisp + post:share_asian + post:share_black  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens | block_group + wk  | 0 | county)
+fe_m5 <- felm(data=fe_sat_data_cbg_weekly_diff, rel.f1.base)  
+
+## make table
+stargazer(fe_m0, fe_m1,fe_m2,fe_m3,fe_m4,fe_m5, keep = c("post:", ":post", "pct_away_diff"),
+          report = c("vcs*"), type="text",  dep.var.labels = c(""),
+          dep.var.caption = "Dependent variable: PM2.5",
+          omit.stat = c("adj.rsq","rsq", "f", "ser"),
+          title="% away from home, weekly, Delta 2020-2019, all CA", align=F,
+          add.lines=list(c("CBG FEs" , rep("Yes", 9)),
+                         c("Week FEs" , rep("Yes", 9)),
+                         c("P(T,RH,P) 2019" , rep("Yes", 7), "No", "Yes"),
+                         c("P(T,RH,P) 2020" , rep("Yes", 7), "No", "Yes")))
+
+```
+
+Arrange for plot.
+
+```{r arrange mobility data weekly}
+touse <- c( "post:share_hisp", "post:share_asian", "post:share_black")
+
+m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=4L)
+m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=5L)
+m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=6L)
+m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=7L)
+m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=9L)
+m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=8L)
+
+all_multi_models <- rbind(m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+all_models <- all_multi_models %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+```
+
+Publishable version of panel B:
+
+```{r, pretty plot weekly mobility}
+
+# load data, replace later
+df <- all_models %>% rename(beta= estimate, se = std.error,  
+                            lb = conf.low, ub = conf.high) %>%  
+  mutate(size_inter = round(100*beta*0.1/7.62,2))
+
+#create effect size column
+specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                        specify_decimal(lb,2), ", ", 
+                                        specify_decimal(ub,2), ")"))
+
+#arrange and plot
+df <- df %>% mutate(neworder = ifelse(term == "post:share_asian", 2, NA))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_black", 1, neworder))
+df <- df %>% mutate(neworder = ifelse(term == "post:share_hisp", 3, neworder))
+df <- df %>% mutate(neworder = ifelse(is.na(neworder), 4, neworder))
+
+
+df <- df %>%  group_by(neworder) %>% mutate(indx  =n():1) %>%  
+  arrange(desc(neworder), desc(indx)) %>%  
+  mutate(policy=paste0(neworder,"_", indx))
+
+coef.plot <- ggplot(data = df) + 
+  geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+  geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+  geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+  geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+  scale_colour_manual(name="", 
+                        breaks=c("post:share_asian", "post:share_black","post:share_hisp"), 
+                        values=c("post:share_asian" = "#78bea2", "post:share_black"="salmon", 
+                                 "post:share_hisp"="#655643")) +
+  scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+  xlim(-0.12,0.17) +
+    theme_fig2() + 
+    xlab("Estimated effect on change in mobility") + ylab("") 
+
+plot(coef.plot)
+
+# don't ask me how I came up with these height and width numbers 
+ggsave(coef.plot, file = paste0(wd_path,"/figures/FigED3_panelF.pdf"), width = 5.25, height = 2.5*1.1) 
+
+```
+
+Figure ED4 PM2.5 (left panels). Main figure without Los Angeles County,  Central Valley, or both.
+
+```{r no valley}
+valley <- c("Kern County", "Kings County", "Tulare County", "Fresno County", "Madera County", "Merced County", "Stanislaus County", "San Joaquin County")
+lacounty <- "Los Angeles County"
+
+excl.list <- list(a= lacounty, b = valley, c = c(lacounty, valley))
+
+k = 1
+for(i in 1:length(excl.list)) {
+  
+  # generate names of panels
+  fname <- paste0(wd_path,"/figures/FigED4_panel",LETTERS[k],LETTERS[k+2],".pdf")
+  fname2 <- paste0(wd_path,"/figures/FigED4_panel",LETTERS[k+1],LETTERS[k+1+2],".pdf")
+
+  k <- k + 4
+
+  ## baseline PM2.5 post shutdown in 2019 after weighting
+  fe_data_cbg_diff_drop <- fe_data_cbg_diff %>% filter(adj_phase==F) %>% filter(!(county %in% excl.list[[i]]))
+  
+  rel.f1.base <- Formula(sample_mean_diff ~ 0 | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date  | 0 | county)
+  
+    rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg )
+  fe_m0_inc <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens )
+  fe_m0_road <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens )
+  fe_m0_pop <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff )
+  fe_m0_mob <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights)
+  
+  rel.f1.base <- Formula(sample_mean_diff ~ post:share_hisp +  post:share_asian  + post:share_black  | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+  
+  fe_m0 <- felm(data=fe_data_cbg_diff_drop, rel.f1.base, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + pct_away_diff)
+  fe_m1 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+  fe_m2 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+  fe_m3 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+  fe_m4 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff)
+  fe_m5 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  rel.f1.base <- Formula(sample_mean_diff ~ post:share_hisp  + post:share_asian  + post:share_black + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens + pct_away_diff | block_group + date  | 0 | county)
+  fe_m6 <- felm(data=fe_data_cbg_diff_drop, rel.f1.base, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  # arrange for plotting
+  
+  m0_mob_df <- tidy(fe_m0_mob, conf.int = T) %>% filter(term == "pct_away_diff")  %>% mutate(model = "Mobility", order=1L)
+  m0_inc_df <- tidy(fe_m0_inc, conf.int = T) %>% filter(term == "post:ln_inc_cbg")  %>% mutate(model = "Income", order=2L)
+  m0_road_df <- tidy(fe_m0_road, conf.int = T) %>% filter(term == "post:ln_road_dens")  %>% mutate(model = "Road Density", order=3L)
+  m0_pop_df <- tidy(fe_m0_pop, conf.int = T) %>% filter(term == "post:ln_pop_dens")  %>% mutate(model = "Pop. Density", order=4L)
+  
+  all_single_models <- rbind(m0_mob_df, m0_inc_df, m0_road_df, m0_pop_df)
+
+  touse <- c( "post:share_hisp", "post:share_asian", "post:share_black")
+  
+  m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=5L)
+  m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Mobility", order=6L)
+  m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=7L)
+  m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=8L)
+  m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=9L)
+  m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=11L)
+  m6_df <- tidy(fe_m6, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=10L)
+  
+  all_multi_models <- rbind(m6_df, m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+  
+  all_models <- rbind(all_single_models,all_multi_models) %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+  
+  # rename
+  
+  df <- all_models %>% dplyr::rename(beta= estimate, se = std.error,  
+                              lb = conf.low, ub = conf.high) %>%  
+    mutate(size_inter = round(100*beta*0.1/7.62,2))
+  
+  #create effect size column
+  specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+  df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                          specify_decimal(lb,2), ", ", 
+                                          specify_decimal(ub,2), ")"))
+  
+  #arrange and plot
+  df <- df %>% mutate(neworder = ifelse(term == "post:share_asian", 2, NA))
+  df <- df %>% mutate(neworder = ifelse(term == "post:share_black", 1, neworder))
+  df <- df %>% mutate(neworder = ifelse(term == "post:share_hisp", 3, neworder))
+  df <- df %>% mutate(neworder = ifelse(is.na(neworder), 4, neworder))
+  
+  
+  df <- df %>%  group_by(neworder) %>% dplyr::mutate(indx  =n():1) %>%  
+    arrange(desc(neworder), desc(indx)) %>%  
+    mutate(policy=paste0(neworder,"_", indx))
+  
+  coef.plot <- ggplot(data = df) + 
+    geom_hline(yintercept= 21.5, colour="grey70", linetype="dashed", size = 0.3) +
+    geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+    geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+    geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+    geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+    scale_colour_manual(name="", 
+                          breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                   "post:ln_pop_dens", "post:share_asian", "post:share_black","post:share_hisp"), 
+                          values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                   "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                   "post:share_asian" = "#78bea2", "post:share_black"="salmon", 
+                                   "post:share_hisp"="#655643")) +
+    scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+    xlim(-6, 4) + 
+    theme_fig2() + xlab("Estimated effect on change in PM2.5") + ylab("") 
+  
+  ## add effect size labels on right, need to crop
+  size.plot <- ggplot(data = df) + 
+    geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+    scale_y_discrete(limits = rev(df$policy), labels=rev(df$effectsize), position = "left") +
+      xlab("Effect size") + ylab("") +  theme_fig2() + coord_cartesian(xlim =c(-0.2,0.2))  +
+      ggtitle("") 
+  
+  plot(coef.plot)
+  
+  # don't ask me how I came up with these height and width numbers 
+  ggsave(coef.plot, file = fname, width = 5.25, height = 2.5*1.1) 
+  
+  ### now mobility
+  
+    rel.f1.base <- Formula(pct_away_diff ~ 0 | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date  | 0 | county)
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg )
+  fe_m0_inc <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens )
+  fe_m0_road <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens )
+  fe_m0_pop <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.base <- Formula(pct_away_diff ~  post:share_hisp  + post:share_asian + post:share_black | T_RH_PRECIP_FEs_20 + T_RH_PRECIP_FEs_19 + block_group + date   | 0 | county   )
+  
+  fe_m0 <- felm(data=fe_data_cbg_diff_drop, rel.f1.base, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg)
+  fe_m1 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_road_dens)
+  fe_m2 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights) 
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_pop_dens)
+  fe_m3 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  rel.f1.curent <- update(rel.f1.base, . ~ . + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens)
+  fe_m4 <- felm(data=fe_data_cbg_diff_drop, rel.f1.curent, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  rel.f1.base <- Formula(pct_away_diff ~ post:share_hisp + post:share_asian + post:share_black  + post:ln_inc_cbg + post:ln_road_dens + post:ln_pop_dens | block_group + date  | 0 | county)
+  fe_m5 <- felm(data=fe_data_cbg_diff_drop, rel.f1.base, weights = fe_data_cbg_diff_drop$post_weights)  
+  
+  ## Arrange for plot and plot.
+    m0_inc_df <- tidy(fe_m0_inc, conf.int = T) %>% filter(term == "post:ln_inc_cbg")  %>% mutate(model = "Income", order=1L)
+  m0_road_df <- tidy(fe_m0_road, conf.int = T) %>% filter(term == "post:ln_road_dens")  %>% mutate(model = "Road Density", order=2L)
+  m0_pop_df <- tidy(fe_m0_pop, conf.int = T) %>% filter(term == "post:ln_pop_dens")  %>% mutate(model = "Pop. Density", order=3L)
+  
+  all_single_models <- rbind(m0_inc_df, m0_road_df, m0_pop_df)
+  
+  touse <- c( "post:share_hisp", "post:share_asian", "post:share_black")
+  
+  m0_df <- tidy(fe_m0, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "Base", order=5L)
+  m1_df <- tidy(fe_m1, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Mobility", order=6L)
+  m2_df <- tidy(fe_m2, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Income", order=7L)
+  m3_df <- tidy(fe_m3, conf.int = T) %>% filter(term %in% touse) %>%  mutate(model = "w/ Road Density", order=8L)
+  m4_df <- tidy(fe_m4, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/ Pop. Density", order=9L)
+  m5_df <- tidy(fe_m5, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "All", order=11L)
+  m6_df <- tidy(fe_m6, conf.int = T) %>% filter(term %in% touse) %>% mutate(model = "w/o Weather", order=10L)
+  
+  all_multi_models <- rbind(m5_df,m4_df, m3_df, m2_df, m1_df, m0_df)
+
+  all_models <- rbind(all_single_models,all_multi_models) %>%  arrange(order, term) %>% mutate(order_det = group_indices(., order, term))
+  
+  # load data, replace later
+  df <- all_models  %>% rename(beta= estimate, se = std.error,  
+                              lb = conf.low, ub = conf.high) %>%  
+    mutate(size_inter = round(100*beta*0.1/7.62,2)) %>% 
+    mutate(beta=100*beta, se = 100*se, lb = 100*lb, ub = 100*ub)
+  
+  #create effect size column
+  specify_decimal <- function(x, k) trimws(format(round(x, k), nsmall=k))
+  df <- df %>% mutate(effectsize = paste0(specify_decimal(beta, 2), " (", 
+                                          specify_decimal(lb,2), ", ", 
+                                          specify_decimal(ub,2), ")"))
+  
+  #arrange and plot
+  df <- df %>% mutate(neworder = ifelse(term == "post:share_asian", 2, NA))
+  df <- df %>% mutate(neworder = ifelse(term == "post:share_black", 1, neworder))
+  df <- df %>% mutate(neworder = ifelse(term == "post:share_hisp", 3, neworder))
+  df <- df %>% mutate(neworder = ifelse(is.na(neworder), 4, neworder))
+  
+  
+  df <- df %>%  group_by(neworder) %>% mutate(indx  =n():1) %>%  
+    arrange(desc(neworder), desc(indx)) %>%  
+    mutate(policy=paste0(neworder,"_", indx))
+  
+  coef.plot <- ggplot(data = df) + 
+    geom_hline(yintercept= 0.5, colour="grey70", linetype="solid", size = 0.3) + 
+    geom_vline(xintercept=0, colour="grey70", linetype="solid", size = 0.3) +
+    geom_segment(aes(x = lb, y = policy, xend = ub, yend = policy), size = 0.3, colour =  "grey39") + 
+    geom_point(aes(x=beta, y=policy, group = neworder, color = term),  size=dot.size, alpha = 0.9) +
+    scale_colour_manual(name="", 
+                          breaks=c("pct_away_diff", "post:ln_inc_cbg", "post:ln_road_dens", 
+                                   "post:ln_pop_dens", "post:share_asian", "post:share_black","post:share_hisp"), 
+                          values=c("pct_away_diff"="#1c4966", "post:ln_inc_cbg"="paleturquoise4", 
+                                   "post:ln_road_dens"="#e6ac27", "post:ln_pop_dens"="#bb7693", 
+                                   "post:share_asian" = "#78bea2", "post:share_black"="salmon", 
+                                   "post:share_hisp"="#655643")) +
+    scale_y_discrete(limits = rev(df$policy), labels=df %>% arrange(policy) %>%  pull(model), position = "left") +
+    xlim(-40, 25) + 
+      theme_fig2() +  xlab("Estimated effect on change in mobility") + ylab("") 
+
+  plot(coef.plot)
+  
+  ggsave(coef.plot, file = fname2, width = 5.25, height = 2.5*1.1) 
+
+}
+```
+
+

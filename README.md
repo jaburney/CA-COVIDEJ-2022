@@ -2,7 +2,7 @@
 
 This repository contains replication code and data availability for "Disparate air pollution reductions during California’s COVID-19 economic shutdown" published in Nature Sustainability, 2022. (https://doi.org/10.1038/s41893-022-00856-1)
 
-Please direct questions to Prof. Jennifer Burney at jburney@ucsd.edu, who may pass them to the appropriate coauthor(s).
+Please direct questions to Jen Burney at jburney@ucsd.edu, who may pass them to the appropriate coauthor(s).
 
 ## Repository organization
 * **data**: contains small data and processed data used for models  

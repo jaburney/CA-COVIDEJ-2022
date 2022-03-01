@@ -1,6 +1,6 @@
 # Disparate air pollution reductions during California’s COVID-19 economic shutdown
 
-This repository contains replication code and data availability for "Disparate air pollution reductions during California’s COVID-19 economic shutdown" published in Nature Sustainability, 2022 (**link when available**)
+This repository contains replication code and data availability for "Disparate air pollution reductions during California’s COVID-19 economic shutdown" published in Nature Sustainability, 2022. (https://doi.org/10.1038/s41893-022-00856-1)
 
 Please direct questions to Prof. Jennifer Burney at jburney@ucsd.edu, who may pass them to the appropriate coauthor(s).
 
@@ -14,7 +14,7 @@ Please direct questions to Prof. Jennifer Burney at jburney@ucsd.edu, who may pa
 
 ## Data
 #### PM2.5
-We use PurpleAir PM2.5 data and California Air Resources Board (CARB) PM2.5 data. These are publicly available and were downloaded from their respective sources. The raw data files are available at https://www.purpleair.com/sensorlist and  https://www.arb.ca.gov/aqmis2/aqdselect.php.  
+We use PurpleAir PM_{2.5} data and California Air Resources Board (CARB) PM_{2.5} data. These are publicly available and were downloaded from their respective sources. The raw data files are available at https://www.purpleair.com/sensorlist and  https://www.arb.ca.gov/aqmis2/aqdselect.php.  
   
 The raw CARB data is available in data/PM_CARB and the raw PurpleAir data is available at the dataverse. These station data are cleaned and merged (along with census and climate data) using the script ./code/ingest_combine_CARB_PurpleAir_EJ_FINAL.R  
   
